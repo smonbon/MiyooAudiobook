@@ -1,0 +1,26 @@
+# Build artifacts
+audiobook-player
+test-minimal
+dist/
+
+# macOS
+.DS_Store
+._*
+
+# IDE
+.vscode/
+.idea/
+
+# Debug output
+*.log
+debug.log
+
+# Font (user must provide their own)
+assets/font.ttf
+
+# Runtime files (generated on device)
+progress.txt
+settings.txt
+
+# Docker build cache
+.docker/

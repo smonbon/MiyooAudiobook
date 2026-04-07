@@ -1,0 +1,6 @@
+{
+    "label": "Audiobooks",
+    "icon": "./assets/icon.png",
+    "launch": "/mnt/SDCARD/App/MiyooAudiobook/launch.sh",
+    "description": "Audiobook player"
+}

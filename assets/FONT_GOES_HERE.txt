@@ -1,0 +1,9 @@
+Place a TTF font file named "font.ttf" in this folder.
+
+Free options (no license issues):
+- Inter:        https://fonts.google.com/specimen/Inter
+- Noto Sans:    https://fonts.google.com/noto/specimen/Noto+Sans
+- DejaVu Sans:  https://dejavu-fonts.github.io
+
+Download, rename to font.ttf, drop it here.
+The app will not start without it.
