@@ -36,8 +36,11 @@ clean:
 # Creates ./dist/MiyooAudiobook.zip ready to copy to SD card
 package: $(TARGET)
 	mkdir -p dist/App/MiyooAudiobook/assets
+	mkdir -p dist/App/MiyooAudiobook/lib
 	cp $(TARGET)          dist/App/MiyooAudiobook/
 	cp scripts/launch.sh  dist/App/MiyooAudiobook/
+	cp config.json        dist/App/MiyooAudiobook/
 	cp assets/*           dist/App/MiyooAudiobook/assets/ 2>/dev/null || true
+	cp lib/*.so*          dist/App/MiyooAudiobook/lib/    2>/dev/null || true
 	cd dist && zip -r MiyooAudiobook.zip App/
 	@echo "Package ready → dist/MiyooAudiobook.zip"
