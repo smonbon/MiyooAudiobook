@@ -25,6 +25,7 @@
 #include <netdb.h>
 #include <sys/time.h>
 #include <errno.h>
+#include <signal.h>
 
 #define SCREEN_W    640
 #define SCREEN_H    480
@@ -98,6 +99,21 @@ static void screen_off(void) {
         if (cur > 0) g_saved_brightness = cur;
         set_backlight("0");
         g_screen_off = 1;
+    }
+}
+
+// ============================================================
+//  Stay-awake (prevent OnionOS auto-sleep while playing)
+// ============================================================
+
+#define STAY_AWAKE_PATH "/tmp/stay_awake"
+
+static void stay_awake_set(int on) {
+    if (on) {
+        FILE *f = fopen(STAY_AWAKE_PATH, "w");
+        if (f) fclose(f);
+    } else {
+        unlink(STAY_AWAKE_PATH);
     }
 }
 
@@ -627,6 +643,7 @@ typedef struct {
     const char *hint_albums;
     const char *hint_tracks;
     const char *np_pause;
+    const char *np_play;
     const char *np_prev_next;
     const char *np_speed;
     const char *np_browse_back;
@@ -667,7 +684,8 @@ static const Strings strings[LANG_COUNT] = {
         "A:Open  Start:NowPlaying  Select:Settings  B:Quit",
         "A:Open  Start:NowPlaying  Select:Settings  B:Back",
         "A:Play  Start:NowPlaying  Select:Settings  B:Back",
-        "A:Pause", "Left:Prev  Right:Next", "Up/Dn:Speed",
+        "A:Pause", "A:Play",
+        "Left:Prev  Right:Next", "Up/Dn:Speed",
         "Start:Browse  B:Back", "Track %d / %d",
         "A: Confirm lock", "B: Cancel",
         "A: Confirm unlock", "B: Cancel",
@@ -695,7 +713,8 @@ static const Strings strings[LANG_COUNT] = {
         "A:Öffnen  Start:Wiedergabe  Select:Einst.  B:Beenden",
         "A:Öffnen  Start:Wiedergabe  Select:Einst.  B:Zurück",
         "A:Abspielen  Start:Wiedergabe  Select:Einst.  B:Zurück",
-        "A:Pause", "Links:Zurück  Rechts:Weiter", "Auf/Ab:Tempo",
+        "A:Pause", "A:Play",
+        "Links:Zurück  Rechts:Weiter", "Auf/Ab:Tempo",
         "Start:Übersicht  B:Zurück", "Titel %d / %d",
         "A: Sperren bestät.", "B: Abbrechen",
         "A: Entsperr. bestät.", "B: Abbrechen",
@@ -1154,19 +1173,23 @@ static void load_progress(void) {
 
         // Parse "dirpath|track|ms"
         char *p1 = strrchr(line, '|');
-        if (!p1) continue;
+        if (!p1 || p1 == line) continue;
         *p1 = '\0';
         int ms = atoi(p1 + 1);
+        if (ms < 0) ms = 0;
 
         char *p2 = strrchr(line, '|');
-        if (!p2) continue;
+        if (!p2 || p2 == line) continue;
         *p2 = '\0';
         int trk = atoi(p2 + 1);
+        if (trk < 0) trk = 0;
 
         const char *dir = line;
 
         for (int i = 0; i < g_album_total; i++) {
             if (strcmp(g_albums[i].dirpath, dir) == 0) {
+                // Validate track index against album
+                if (trk >= g_albums[i].track_count) trk = 0;
                 g_albums[i].saved_track = trk;
                 g_albums[i].saved_position_ms = ms;
                 log_msg("Progress loaded: album %d track %d @ %d ms", i, trk, ms);
@@ -1205,6 +1228,7 @@ static void stop_playback(void) {
     app.play_track  = -1;
     app.is_paused   = 0;
     app.play_start_offset_ms = 0;
+    stay_awake_set(0);
 }
 
 static void do_play(int artist_idx, int album_idx, int track_idx, int seek_ms) {
@@ -1232,6 +1256,10 @@ static void do_play(int artist_idx, int album_idx, int track_idx, int seek_ms) {
         // Use our own decoder for variable speed
         if (!decoder_open(trk->filepath, seek_ms)) {
             snprintf(app.error_msg, sizeof(app.error_msg), "Cannot load file");
+            app.play_artist = -1;
+            app.play_album  = -1;
+            app.play_track  = -1;
+            stay_awake_set(0);
             return;
         }
     } else {
@@ -1240,6 +1268,10 @@ static void do_play(int artist_idx, int album_idx, int track_idx, int seek_ms) {
         if (!app.music) {
             log_msg("LoadMUS failed: %s", Mix_GetError());
             snprintf(app.error_msg, sizeof(app.error_msg), "Cannot load file");
+            app.play_artist = -1;
+            app.play_album  = -1;
+            app.play_track  = -1;
+            stay_awake_set(0);
             return;
         }
         Mix_VolumeMusic(app.volume);
@@ -1248,6 +1280,7 @@ static void do_play(int artist_idx, int album_idx, int track_idx, int seek_ms) {
     }
     app.play_start_offset_ms = seek_ms;
     app.play_start_ticks = SDL_GetTicks();
+    stay_awake_set(1);
 }
 
 static void toggle_pause(void) {
@@ -1257,9 +1290,11 @@ static void toggle_pause(void) {
         app.play_start_ticks = SDL_GetTicks();
         if (app.music) Mix_ResumeMusic();
         app.is_paused = 0;
+        stay_awake_set(1);
     } else {
         if (app.music) Mix_PauseMusic();
         app.is_paused = 1;
+        stay_awake_set(0);
     }
 }
 
@@ -1317,7 +1352,11 @@ static void play_next(void) {
 
 static int item_count(void) {
     if (app.view == VIEW_ARTISTS) return g_artist_total;
-    if (app.view == VIEW_ALBUMS) return g_artists[app.cur_artist].album_count;
+    if (app.view == VIEW_ALBUMS) {
+        if (app.cur_artist < 0 || app.cur_artist >= g_artist_total) return 0;
+        return g_artists[app.cur_artist].album_count;
+    }
+    if (app.cur_album < 0 || app.cur_album >= g_album_total) return 0;
     return g_albums[app.cur_album].track_count;
 }
 
@@ -1333,9 +1372,19 @@ static void render_resume(void) {
     SDL_FillRect(app.screen, NULL,
                  SDL_MapRGB(app.screen->format, 0x1A, 0x1A, 0x2E));
 
+    if (app.resume_album < 0 || app.resume_album >= g_album_total ||
+        app.resume_artist < 0 || app.resume_artist >= g_artist_total) {
+        app.show_resume = 0;
+        return;
+    }
     Album *alb = &g_albums[app.resume_album];
     Artist *art = &g_artists[app.resume_artist];
-    Track *trk = &g_tracks[alb->track_start + alb->saved_track];
+    int trk_idx = alb->track_start + alb->saved_track;
+    if (trk_idx < 0 || trk_idx >= g_track_total) {
+        app.show_resume = 0;
+        return;
+    }
+    Track *trk = &g_tracks[trk_idx];
 
     // Title
     draw_text(app.font_large, S()->continue_listening,
@@ -1409,6 +1458,9 @@ static void handle_resume_input(SDL_Event *e) {
     case SDLK_SPACE:   // A – resume playback
     case SDLK_RETURN:  // Start – also resume
     {
+        if (app.resume_album < 0 || app.resume_album >= g_album_total) {
+            app.show_resume = 0; break;
+        }
         Album *alb = &g_albums[app.resume_album];
         int resume_ms = alb->saved_position_ms - 3000;
         if (resume_ms < 0) resume_ms = 0;
@@ -1542,7 +1594,9 @@ static void render_nowplaying(void) {
     SDL_FillRect(app.screen, NULL,
                  SDL_MapRGB(app.screen->format, 0x12, 0x12, 0x24));
 
-    if (app.play_artist < 0) {
+    if (app.play_artist < 0 || app.play_artist >= g_artist_total ||
+        app.play_album < 0  || app.play_album >= g_album_total ||
+        app.play_track < 0  || app.play_track >= g_track_total) {
         draw_text(app.font_large, S()->nothing_playing,
                   rgb(0x88, 0x88, 0x99), SCREEN_W/2 - 100, SCREEN_H/2 - 20);
         SDL_Flip(app.screen);
@@ -1751,7 +1805,7 @@ static void render_nowplaying(void) {
         // Row 1: main controls
         draw_text(app.font_small, "L1:-15s",
                   rgb(0x4F, 0xC3, 0xF7), 20, SCREEN_H - 84);
-        draw_text(app.font_small, S()->np_pause,
+        draw_text(app.font_small, app.is_paused ? S()->np_play : S()->np_pause,
                   rgb(0x44, 0xCC, 0x66), SCREEN_W/2 - 30, SCREEN_H - 84);
         draw_text(app.font_small, "R1:+15s",
                   rgb(0x4F, 0xC3, 0xF7), SCREEN_W - 100, SCREEN_H - 84);
@@ -2499,8 +2553,10 @@ static void render(void) {
 
     // Header
     const char *hdr_src = "Audiobooks";
-    if (app.view == VIEW_ALBUMS) hdr_src = g_artists[app.cur_artist].title;
-    else if (app.view == VIEW_TRACKS) hdr_src = g_albums[app.cur_album].title;
+    if (app.view == VIEW_ALBUMS && app.cur_artist >= 0 && app.cur_artist < g_artist_total)
+        hdr_src = g_artists[app.cur_artist].title;
+    else if (app.view == VIEW_TRACKS && app.cur_album >= 0 && app.cur_album < g_album_total)
+        hdr_src = g_albums[app.cur_album].title;
     char hdr[42]; truncate_str(hdr_src, hdr, 38);
     draw_text(app.font_large, hdr, rgb(0x4F, 0xC3, 0xF7), 24, 14);
 
@@ -2914,12 +2970,26 @@ static void ntp_sync(void) {
 }
 
 // ============================================================
+//  Signal handler – graceful shutdown on SIGTERM / SIGHUP
+// ============================================================
+
+static volatile sig_atomic_t g_signal_received = 0;
+
+static void signal_handler(int sig) {
+    (void)sig;
+    g_signal_received = 1;
+}
+
+// ============================================================
 //  Main
 // ============================================================
 
 int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused))) {
     log_init();
     log_msg("App starting");
+
+    signal(SIGTERM, signal_handler);
+    signal(SIGHUP,  signal_handler);
 
     memset(&app, 0, sizeof(app));
     app.play_artist = -1;
@@ -2991,7 +3061,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
     Uint32 last_save = 0;
     SDL_Event e;
 
-    while (app.running) {
+    while (app.running && !g_signal_received) {
         Uint32 start = SDL_GetTicks();
 
         // L2+R2 hold detection → show lock/unlock prompt (confirmed with A)
@@ -3134,6 +3204,9 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
     }
 
 cleanup:
+    // 0. Allow system to sleep again
+    stay_awake_set(0);
+
     // 1. Stop decoder + halt music (but keep audio subsystem open)
     decoder_close();
     if (app.music) { Mix_HaltMusic(); Mix_FreeMusic(app.music); app.music = NULL; }
