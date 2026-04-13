@@ -467,12 +467,11 @@ static void wsola_process(void) {
     }
 }
 
-// Mix_HookMusic callback — WSOLA time-stretched output
-static void music_hook(void *udata, Uint8 *stream, int len) {
+// SDL audio callback — fills buffer from WSOLA pipeline
+static void audio_callback(void *udata, Uint8 *stream, int len) {
     (void)udata;
     Sint16 *out = (Sint16 *)stream;
     int out_frames = len / 4;
-
     if (app.is_paused || !g_decoder) {
         memset(stream, 0, len);
         return;
@@ -482,6 +481,7 @@ static void music_hook(void *udata, Uint8 *stream, int len) {
     wsola_process();
 
     float vol = (float)app.volume / (float)MIX_MAX_VOLUME;
+    int produced = 0;
 
     for (int i = 0; i < out_frames; i++) {
         if (g_wsola_avail > 0) {
@@ -489,6 +489,7 @@ static void music_hook(void *udata, Uint8 *stream, int len) {
             out[i * 2 + 1] = (Sint16)(g_wsola_buf[g_wsola_rpos * 2 + 1] * vol);
             g_wsola_rpos = (g_wsola_rpos + 1) % WSOLA_BUFSIZE;
             g_wsola_avail--;
+            produced++;
         } else {
             out[i * 2] = 0;
             out[i * 2 + 1] = 0;
@@ -496,50 +497,48 @@ static void music_hook(void *udata, Uint8 *stream, int len) {
     }
 }
 
+static void decoder_close(void);
+
 // Open an MP3 for decoding
 static int decoder_open(const char *filepath, int seek_ms) {
-    if (g_decoder) { mp3_close(g_decoder); mp3_delete(g_decoder); g_decoder = NULL; }
+    // Close any existing decoder (audio callback sees g_decoder=NULL → silence)
+    decoder_close();
 
+    // Prepare new decoder WITHOUT exposing it to the audio callback yet
     int err = 0;
-    g_decoder = mp3_new(NULL, &err);
-    if (!g_decoder) { log_msg("mpg123_new failed: %d", err); return 0; }
+    mpg123_handle *dec = mp3_new(NULL, &err);
+    if (!dec) { log_msg("mpg123_new failed: %d", err); return 0; }
 
-    // Force 44100 Hz stereo 16-bit output
-    mp3_format_none(g_decoder);
-    mp3_format(g_decoder, 44100, MPG123_STEREO, MPG123_ENC_SIGNED_16);
-    mp3_format(g_decoder, 44100, MPG123_MONO, MPG123_ENC_SIGNED_16);
+    mp3_format_none(dec);
+    mp3_format(dec, 44100, MPG123_STEREO, MPG123_ENC_SIGNED_16);
+    mp3_format(dec, 44100, MPG123_MONO, MPG123_ENC_SIGNED_16);
 
-    if (mp3_open(g_decoder, filepath) != MPG123_OK) {
+    if (mp3_open(dec, filepath) != MPG123_OK) {
         log_msg("mpg123_open failed: %s", filepath);
-        mp3_delete(g_decoder);
-        g_decoder = NULL;
+        mp3_delete(dec);
         return 0;
     }
 
-    // Get actual format — read into matching types to avoid ABI issues
     long rate = 44100; int channels = 2, encoding = 0;
-    if (mp3_getformat(g_decoder, &rate, &channels, &encoding) != MPG123_OK) {
+    if (mp3_getformat(dec, &rate, &channels, &encoding) != MPG123_OK) {
         log_msg("  mpg123_getformat failed, assuming 44100 Hz stereo");
-        rate = 44100;
-        channels = 2;
+        rate = 44100; channels = 2;
     }
-    // Sanity check — mpg123 on some ARM builds returns garbage
     if (rate < 8000 || rate > 48000) rate = 44100;
     if (channels < 1 || channels > 2) channels = 2;
-    g_decode_rate = rate;
-    g_decode_channels = channels;
     log_msg("  mpg123 format: %ld Hz, %d ch", rate, channels);
 
-    // Seek if needed
+    // Seek (can be slow on large files — done before exposing to callback)
+    long seek_base = 0;
     if (seek_ms > 0) {
         long sample_off = (long)((long long)seek_ms * rate / 1000);
-        mp3_seek(g_decoder, sample_off, 0 /*SEEK_SET*/);
-        g_seek_base_frames = sample_off;
-    } else {
-        g_seek_base_frames = 0;
+        mp3_seek(dec, sample_off, 0 /*SEEK_SET*/);
+        seek_base = sample_off;
     }
 
-    // Reset ring buffer and WSOLA state
+    // Pre-fill ring buffer using local decoder handle (callback can't see it yet)
+    g_decode_rate = rate;
+    g_decode_channels = channels;
     g_ring_wpos = 0;
     g_ring_rpos = 0;
     g_ring_avail = 0;
@@ -550,18 +549,20 @@ static int decoder_open(const char *filepath, int seek_ms) {
     g_wsola_avail = 0;
     g_wsola_has_prev = 0;
 
-    // Pre-fill ring buffer
+    // Temporarily set g_decoder for fill_ring (audio is locked so callback won't run)
+    SDL_LockAudio();
+    g_decoder = dec;
+    g_seek_base_frames = seek_base;
     fill_ring();
+    SDL_UnlockAudio();
+    // Now audio callback can see g_decoder and fully initialized buffers
 
-    // Hook into SDL_mixer's music channel
-    Mix_HookMusic(music_hook, NULL);
-    log_msg("  music hook installed, playback started");
+    log_msg("  decoder ready, playback started (ring=%d)", g_ring_avail);
     return 1;
 }
 
 static void decoder_close(void) {
     SDL_LockAudio();
-    Mix_HookMusic(NULL, NULL);
     if (g_decoder) {
         mp3_close(g_decoder);
         mp3_delete(g_decoder);
@@ -669,6 +670,7 @@ typedef struct {
     const char *cover_no_wifi;
     const char *press_b_cancel;
     const char *clock_format;
+    const char *about;
 } Strings;
 
 static const Strings strings[LANG_COUNT] = {
@@ -699,7 +701,8 @@ static const Strings strings[LANG_COUNT] = {
         "Downloading cover...", "Cover search complete",
         "%d of %d covers found", "No network connection",
         "B: Cancel",
-        "Clock format"
+        "Clock format",
+        "About"
     },
     { // Deutsch
         "Einstellungen", "Bildschirm-Timeout", "Schlaf-Timer", "Sprache",
@@ -713,7 +716,7 @@ static const Strings strings[LANG_COUNT] = {
         "A:Öffnen  Start:Wiedergabe  Select:Einst.  B:Beenden",
         "A:Öffnen  Start:Wiedergabe  Select:Einst.  B:Zurück",
         "A:Abspielen  Start:Wiedergabe  Select:Einst.  B:Zurück",
-        "A:Pause", "A:Play",
+        "A:Pause", "A:Abspielen",
         "Links:Zurück  Rechts:Weiter", "Auf/Ab:Tempo",
         "Start:Übersicht  B:Zurück", "Titel %d / %d",
         "A: Sperren bestät.", "B: Abbrechen",
@@ -728,7 +731,8 @@ static const Strings strings[LANG_COUNT] = {
         "Lade Cover herunter...", "Cover-Suche abgeschlossen",
         "%d von %d Covers gefunden", "Keine Netzwerkverbindung",
         "B: Abbrechen",
-        "Uhrzeitformat"
+        "Uhrzeitformat",
+        "Info"
     }
 };
 
@@ -752,7 +756,8 @@ static int g_option_selected = 0;
 static int g_reset_confirm = 0;   // 1 = showing "are you sure?" flash
 static Uint32 g_reset_flash_until = 0;
 static int g_clock_24h = 1;  // 1 = 24h format, 0 = 12h AM/PM
-#define OPTION_COUNT 7  // timeout, sleep, language, path, clock_fmt, covers, reset
+static int g_show_about = 0;
+#define OPTION_COUNT 8  // timeout, sleep, language, path, clock_fmt, covers, reset, about
 
 static const Strings *S(void) { return &strings[g_lang_idx]; }
 
@@ -1263,7 +1268,7 @@ static void do_play(int artist_idx, int album_idx, int track_idx, int seek_ms) {
             return;
         }
     } else {
-        // Fallback to SDL_mixer (no speed control)
+        // SDL_mixer native playback (no speed control on Miyoo)
         app.music = Mix_LoadMUS(trk->filepath);
         if (!app.music) {
             log_msg("LoadMUS failed: %s", Mix_GetError());
@@ -2273,6 +2278,101 @@ static void load_cover_art(void) {
 }
 
 // ============================================================
+//  About screen
+// ============================================================
+
+static int g_about_scroll = 0;
+
+static void render_about(void) {
+    SDL_FillRect(app.screen, NULL,
+                 SDL_MapRGB(app.screen->format, 0x12, 0x12, 0x24));
+
+    int y = 20 - g_about_scroll;
+    SDL_Color h1 = rgb(0x4F, 0xC3, 0xF7);
+    SDL_Color h2 = rgb(0x44, 0xCC, 0x66);
+    SDL_Color tx = rgb(0xCC, 0xCC, 0xDD);
+    SDL_Color dm = rgb(0x77, 0x77, 0x88);
+
+    draw_text(app.font_large, "MiyooAudiobook v1.0.1", h1, 24, y);
+    y += 34;
+    draw_text(app.font_small, "Audiobook player for Miyoo Mini+", dm, 24, y);
+    y += 30;
+
+    // --- Controls ---
+    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
+    y += 10;
+    draw_text(app.font_small, "Controls", h2, 24, y); y += 24;
+    draw_text(app.font_small, "A ............ Play / Pause", tx, 34, y); y += 20;
+    draw_text(app.font_small, "L1 / R1 ...... Seek -/+ 15s", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Left / Right . Previous / Next track", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Up / Down .... Playback speed", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Start ........ Browse / Now Playing", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Select ....... Settings", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Hold L2+R2 ... Lock screen", tx, 34, y); y += 28;
+
+    // --- Folder structure ---
+    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
+    y += 10;
+    draw_text(app.font_small, "Folder structure", h2, 24, y); y += 24;
+    draw_text(app.font_small, "/Audiobooks/", tx, 34, y); y += 20;
+    draw_text(app.font_small, "  Artist Name/", dm, 34, y); y += 20;
+    draw_text(app.font_small, "    Album Name/", dm, 34, y); y += 20;
+    draw_text(app.font_small, "      001_track.mp3", dm, 34, y); y += 20;
+    draw_text(app.font_small, "      002_track.mp3", dm, 34, y); y += 20;
+    draw_text(app.font_small, "      cover.jpg", dm, 34, y); y += 20;
+    draw_text(app.font_small, "Tracks sorted alphabetically.", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Prefix filenames with numbers.", tx, 34, y); y += 28;
+
+    // --- Features ---
+    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
+    y += 10;
+    draw_text(app.font_small, "Features", h2, 24, y); y += 24;
+    draw_text(app.font_small, "Auto-saves progress every 10 seconds", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Variable speed: 0.5x - 2.0x", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Sleep timer with auto-pause", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Screen lock to prevent accidental input", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Cover art from cover.jpg in album folder", tx, 34, y); y += 20;
+    draw_text(app.font_small, "Multi-disc albums via subfolders", tx, 34, y); y += 28;
+
+    // --- License ---
+    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
+    y += 10;
+    draw_text(app.font_small, "License", h2, 24, y); y += 24;
+    draw_text(app.font_small, "MIT License - Open Source", tx, 34, y); y += 20;
+    draw_text(app.font_small, "github.com/smonbon/MiyooAudiobook", tx, 34, y); y += 28;
+
+    draw_text(app.font_small, "Built with SDL 1.2, mpg123, WSOLA", dm, 34, y); y += 30;
+
+    // Footer
+    fill_rect(0, SCREEN_H - 36, SCREEN_W, 36,
+              SDL_MapRGB(app.screen->format, 0x11, 0x11, 0x22));
+    draw_text(app.font_small, "Up/Dn:Scroll  B:Back",
+              rgb(0x55, 0x55, 0x66), 10, SCREEN_H - 26);
+
+    SDL_Flip(app.screen);
+}
+
+static void handle_about(SDL_Event *e) {
+    if (e->type != SDL_KEYDOWN) return;
+    switch (e->key.keysym.sym) {
+    case SDLK_UP:
+        if (g_about_scroll > 0) g_about_scroll -= 20;
+        break;
+    case SDLK_DOWN:
+        g_about_scroll += 20;
+        if (g_about_scroll > 300) g_about_scroll = 300;
+        break;
+    case SDLK_LCTRL:   // B – back
+    case SDLK_ESCAPE:
+        g_show_about = 0;
+        g_about_scroll = 0;
+        break;
+    default:
+        break;
+    }
+}
+
+// ============================================================
 
 static void render_options(void) {
     SDL_FillRect(app.screen, NULL,
@@ -2316,6 +2416,7 @@ static void render_options(void) {
     labels[4] = S()->clock_format;
     labels[5] = S()->download_covers;
     labels[6] = S()->reset_progress;
+    labels[7] = S()->about;
 
     int row_h = 46;
     for (int i = 0; i < OPTION_COUNT; i++) {
@@ -2330,8 +2431,8 @@ static void render_options(void) {
                   i == g_option_selected ? rgb(0xEE, 0xEE, 0xEE) : rgb(0x88, 0x88, 0x99),
                   30, y + 4);
 
-        if (i == 5 || i == 6) {
-            // Action buttons (covers + reset): show [ A ] hint
+        if (i == 5 || i == 6 || i == 7) {
+            // Action buttons (covers, reset, about): show [ A ] hint
             SDL_Color ac = (i == 6)
                 ? (i == g_option_selected ? rgb(0xEF, 0x44, 0x44) : rgb(0x66, 0x33, 0x33))
                 : (i == g_option_selected ? rgb(0x4F, 0xC3, 0xF7) : rgb(0x33, 0x55, 0x66));
@@ -2449,6 +2550,10 @@ static void handle_options(SDL_Event *e) {
         }
         if (g_option_selected == 6) {
             g_reset_confirm = 1;  // show confirm dialog
+            break;
+        }
+        if (g_option_selected == 7) {
+            g_show_about = 1;
             break;
         }
         // fall through to RIGHT for other options
@@ -3009,17 +3114,30 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
     if (TTF_Init() < 0) {
         log_msg("TTF_Init FAILED"); SDL_Quit(); log_close(); return 1;
     }
-    // Retry audio init — device may need time after stop_audioserver
-    for (int attempt = 0; attempt < 3 && !app.audio_ok; attempt++) {
-        if (attempt > 0) SDL_Delay(200);
-        if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096) < 0) {
-            log_msg("Mix_OpenAudio attempt %d FAILED: %s", attempt + 1, Mix_GetError());
-        } else {
-            app.audio_ok = 1;
+    // Open audio device directly (bypass SDL_mixer — its callbacks don't fire on Miyoo)
+    {
+        SDL_AudioSpec desired, obtained;
+        memset(&desired, 0, sizeof(desired));
+        desired.freq = 44100;
+        desired.format = AUDIO_S16SYS;
+        desired.channels = 2;
+        desired.samples = 2048;
+        desired.callback = audio_callback;
+        desired.userdata = NULL;
+
+        for (int attempt = 0; attempt < 3 && !app.audio_ok; attempt++) {
+            if (attempt > 0) SDL_Delay(200);
+            if (SDL_OpenAudio(&desired, &obtained) < 0) {
+                log_msg("SDL_OpenAudio attempt %d FAILED: %s", attempt + 1, SDL_GetError());
+            } else {
+                app.audio_ok = 1;
+                log_msg("Audio OK: %d Hz, %d ch, %d samples",
+                        obtained.freq, obtained.channels, obtained.samples);
+            }
         }
     }
     if (app.audio_ok) {
-        Mix_VolumeMusic(app.volume);
+        SDL_PauseAudio(0);
         load_mpg123();
     }
 
@@ -3131,6 +3249,8 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 
             if (app.show_quit_confirm)
                 handle_quit_confirm(&e);
+            else if (g_show_about)
+                handle_about(&e);
             else if (g_show_options)
                 handle_options(&e);
             else if (app.show_resume)
@@ -3189,6 +3309,8 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
                 render_lock_confirm();
             else if (app.show_quit_confirm)
                 render_quit_confirm();
+            else if (g_show_about)
+                render_about();
             else if (g_show_options)
                 render_options();
             else if (app.show_resume)
@@ -3207,24 +3329,27 @@ cleanup:
     // 0. Allow system to sleep again
     stay_awake_set(0);
 
-    // 1. Stop decoder + halt music (but keep audio subsystem open)
+    // 1. Stop audio callback first (prevents deadlock during cleanup)
+    if (app.audio_ok) SDL_PauseAudio(1);
+
+    // 2. Stop decoder (safe now that callback is paused)
     decoder_close();
     if (app.music) { Mix_HaltMusic(); Mix_FreeMusic(app.music); app.music = NULL; }
 
-    // 2. Clear BOTH framebuffers to black (needs SDL fully operational)
+    // 3. Clear BOTH framebuffers to black (needs SDL fully operational)
     if (app.screen) {
         SDL_FillRect(app.screen, NULL, 0); SDL_Flip(app.screen);
         SDL_FillRect(app.screen, NULL, 0); SDL_Flip(app.screen);
     }
 
-    // 3. Restore backlight if screen was off
+    // 4. Restore backlight if screen was off
     if (g_screen_off) screen_on();
 
-    // 4. Save progress
+    // 5. Save progress
     save_progress();
 
-    // 5. Now close audio subsystem (after all SDL_Flip calls are done)
-    if (app.audio_ok) { Mix_CloseAudio(); app.audio_ok = 0; }
+    // 6. Now close audio subsystem (after all SDL_Flip calls are done)
+    if (app.audio_ok) { SDL_CloseAudio(); app.audio_ok = 0; }
     if (g_mpg123_lib) { mp3_exit(); dlclose(g_mpg123_lib); g_mpg123_lib = NULL; }
 
     // 6. Free graphics resources
