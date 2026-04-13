@@ -2292,61 +2292,82 @@ static void render_about(void) {
     SDL_Color h2 = rgb(0x44, 0xCC, 0x66);
     SDL_Color tx = rgb(0xCC, 0xCC, 0xDD);
     SDL_Color dm = rgb(0x77, 0x77, 0x88);
+    Uint32 sep = SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A);
+    int de = (g_lang_idx == LANG_DE);
 
     draw_text(app.font_large, "MiyooAudiobook v1.0.1", h1, 24, y);
     y += 34;
-    draw_text(app.font_small, "Audiobook player for Miyoo Mini+", dm, 24, y);
+    draw_text(app.font_small,
+              de ? "Hörbuch-Player für Miyoo Mini+" : "Audiobook player for Miyoo Mini+",
+              dm, 24, y);
     y += 30;
 
     // --- Controls ---
-    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
-    y += 10;
-    draw_text(app.font_small, "Controls", h2, 24, y); y += 24;
-    draw_text(app.font_small, "A ............ Play / Pause", tx, 34, y); y += 20;
-    draw_text(app.font_small, "L1 / R1 ...... Seek -/+ 15s", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Left / Right . Previous / Next track", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Up / Down .... Playback speed", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Start ........ Browse / Now Playing", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Select ....... Settings", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Hold L2+R2 ... Lock screen", tx, 34, y); y += 28;
+    fill_rect(24, y, SCREEN_W - 48, 1, sep); y += 10;
+    draw_text(app.font_small, de ? "Steuerung" : "Controls", h2, 24, y); y += 24;
+    draw_text(app.font_small, de ? "A ............ Abspielen / Pause"
+                                  : "A ............ Play / Pause", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "L1 / R1 ...... Spulen -/+ 15s"
+                                  : "L1 / R1 ...... Seek -/+ 15s", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Links / Rechts Vorheriger / Nächster"
+                                  : "Left / Right . Previous / Next track", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Auf / Ab ..... Wiedergabetempo"
+                                  : "Up / Down .... Playback speed", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Start ........ Übersicht / Wiedergabe"
+                                  : "Start ........ Browse / Now Playing", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Select ....... Einstellungen"
+                                  : "Select ....... Settings", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "L2+R2 halten . Bildschirm sperren"
+                                  : "Hold L2+R2 ... Lock screen", tx, 34, y); y += 28;
 
     // --- Folder structure ---
-    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
-    y += 10;
-    draw_text(app.font_small, "Folder structure", h2, 24, y); y += 24;
+    fill_rect(24, y, SCREEN_W - 48, 1, sep); y += 10;
+    draw_text(app.font_small, de ? "Ordnerstruktur" : "Folder structure", h2, 24, y); y += 24;
     draw_text(app.font_small, "/Audiobooks/", tx, 34, y); y += 20;
-    draw_text(app.font_small, "  Artist Name/", dm, 34, y); y += 20;
+    draw_text(app.font_small, de ? "  Autor Name/" : "  Artist Name/", dm, 34, y); y += 20;
     draw_text(app.font_small, "    Album Name/", dm, 34, y); y += 20;
     draw_text(app.font_small, "      001_track.mp3", dm, 34, y); y += 20;
     draw_text(app.font_small, "      002_track.mp3", dm, 34, y); y += 20;
     draw_text(app.font_small, "      cover.jpg", dm, 34, y); y += 20;
-    draw_text(app.font_small, "Tracks sorted alphabetically.", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Prefix filenames with numbers.", tx, 34, y); y += 28;
+    draw_text(app.font_small, de ? "Tracks werden alphabetisch sortiert."
+                                  : "Tracks sorted alphabetically.", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Dateinamen mit Nummern beginnen."
+                                  : "Prefix filenames with numbers.", tx, 34, y); y += 28;
 
     // --- Features ---
-    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
-    y += 10;
-    draw_text(app.font_small, "Features", h2, 24, y); y += 24;
-    draw_text(app.font_small, "Auto-saves progress every 10 seconds", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Variable speed: 0.5x - 2.0x", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Sleep timer with auto-pause", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Screen lock to prevent accidental input", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Cover art from cover.jpg in album folder", tx, 34, y); y += 20;
-    draw_text(app.font_small, "Multi-disc albums via subfolders", tx, 34, y); y += 28;
+    fill_rect(24, y, SCREEN_W - 48, 1, sep); y += 10;
+    draw_text(app.font_small, de ? "Funktionen" : "Features", h2, 24, y); y += 24;
+    draw_text(app.font_small, de ? "Fortschritt wird alle 10s gespeichert"
+                                  : "Auto-saves progress every 10 seconds", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Wiedergabetempo: 0.5x - 2.0x"
+                                  : "Variable speed: 0.5x - 2.0x", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Schlaf-Timer mit Auto-Pause"
+                                  : "Sleep timer with auto-pause", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Bildschirmsperre gegen Fehlbedienung"
+                                  : "Screen lock to prevent accidental input", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Cover-Art aus cover.jpg im Albumordner"
+                                  : "Cover art from cover.jpg in album folder", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Cover-Download über WLAN (Einstellungen)"
+                                  : "Cover download via WiFi (in Settings)", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Uhrzeit-Sync über Internet beim Start"
+                                  : "Clock syncs via internet on app start", tx, 34, y); y += 20;
+    draw_text(app.font_small, de ? "Multi-Disc Alben über Unterordner"
+                                  : "Multi-disc albums via subfolders", tx, 34, y); y += 28;
 
     // --- License ---
-    fill_rect(24, y, SCREEN_W - 48, 1, SDL_MapRGB(app.screen->format, 0x2A, 0x4A, 0x6A));
-    y += 10;
-    draw_text(app.font_small, "License", h2, 24, y); y += 24;
+    fill_rect(24, y, SCREEN_W - 48, 1, sep); y += 10;
+    draw_text(app.font_small, de ? "Lizenz" : "License", h2, 24, y); y += 24;
     draw_text(app.font_small, "MIT License - Open Source", tx, 34, y); y += 20;
     draw_text(app.font_small, "github.com/smonbon/MiyooAudiobook", tx, 34, y); y += 28;
 
-    draw_text(app.font_small, "Built with SDL 1.2, mpg123, WSOLA", dm, 34, y); y += 30;
+    draw_text(app.font_small, de ? "Erstellt mit SDL 1.2, mpg123, WSOLA"
+                                  : "Built with SDL 1.2, mpg123, WSOLA", dm, 34, y); y += 30;
 
     // Footer
     fill_rect(0, SCREEN_H - 36, SCREEN_W, 36,
               SDL_MapRGB(app.screen->format, 0x11, 0x11, 0x22));
-    draw_text(app.font_small, "Up/Dn:Scroll  B:Back",
+    draw_text(app.font_small,
+              de ? "Auf/Ab:Scrollen  B:Zurück" : "Up/Dn:Scroll  B:Back",
               rgb(0x55, 0x55, 0x66), 10, SCREEN_H - 26);
 
     SDL_Flip(app.screen);
@@ -2354,13 +2375,14 @@ static void render_about(void) {
 
 static void handle_about(SDL_Event *e) {
     if (e->type != SDL_KEYDOWN) return;
+    g_last_input = SDL_GetTicks();  // prevent screen timeout while browsing
     switch (e->key.keysym.sym) {
     case SDLK_UP:
         if (g_about_scroll > 0) g_about_scroll -= 20;
         break;
     case SDLK_DOWN:
         g_about_scroll += 20;
-        if (g_about_scroll > 300) g_about_scroll = 300;
+        if (g_about_scroll > 600) g_about_scroll = 600;
         break;
     case SDLK_LCTRL:   // B – back
     case SDLK_ESCAPE:
